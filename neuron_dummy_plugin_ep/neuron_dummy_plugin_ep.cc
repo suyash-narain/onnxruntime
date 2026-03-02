@@ -12,12 +12,8 @@
 
 #include "neuron_ep_factory.h"
 
-// macOS needs an explicit visibility attribute; Linux/Windows rely on .lds/.def.
-#ifdef __APPLE__
-#define EXPORT_SYMBOL __attribute__((visibility("default")))
-#else
+// Symbol visibility is controlled by the .lds version script.
 #define EXPORT_SYMBOL
-#endif
 
 extern "C" {
 

@@ -16,8 +16,7 @@ if(NOT DEFINED ONNXRUNTIME_ROOT)
   set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/onnxruntime_install")
 endif()
 
-# Where to find libonnxruntime.so / onnxruntime.lib.
-# The install layout is <root>/lib/ on Linux and <root>/lib/ on Windows.
+# Where to find libonnxruntime.so.
 if(NOT DEFINED ONNXRUNTIME_LIB_DIR)
   set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
 endif()
@@ -42,13 +41,8 @@ set(NEURON_EP_SRCS
 # ---------------------------------------------------------------------------
 # Library target
 # ---------------------------------------------------------------------------
-# MODULE on Linux/macOS  → .so with no import library (correct for plugin EPs)
-# SHARED on Windows      → .dll
-if(WIN32)
-  add_library(neuron_dummy_plugin_ep SHARED ${NEURON_EP_SRCS})
-else()
-  add_library(neuron_dummy_plugin_ep MODULE ${NEURON_EP_SRCS})
-endif()
+# MODULE → .so with no import library (correct for plugin EPs)
+add_library(neuron_dummy_plugin_ep MODULE ${NEURON_EP_SRCS})
 
 # Public ORT headers
 target_include_directories(neuron_dummy_plugin_ep PRIVATE
@@ -72,36 +66,21 @@ if(ONNXRUNTIME_LIB)
 else()
     message(STATUS "  libonnxruntime.so not found - relying on runtime symbol resolution")
     # Allow undefined ORT symbols; they are provided by the host ORT process.
-    if(UNIX AND NOT APPLE)
-        target_link_options(neuron_dummy_plugin_ep PRIVATE
-            "-Wl,--allow-shlib-undefined"
-        )
-    endif()
+    target_link_options(neuron_dummy_plugin_ep PRIVATE
+        "-Wl,--allow-shlib-undefined"
+    )
 endif()
 
 # ---------------------------------------------------------------------------
 # Symbol visibility (hide everything except CreateEpFactories/ReleaseEpFactory)
 # ---------------------------------------------------------------------------
-if(UNIX AND NOT APPLE)
-    # Linux – use version script
-    target_link_options(neuron_dummy_plugin_ep PRIVATE
-        "-Wl,--version-script=${CMAKE_SOURCE_DIR}/neuron_dummy_plugin_ep.lds"
-        "-Wl,--no-undefined"
-        "-Wl,--gc-sections"
-        "-Wl,-z,noexecstack"
-    )
-elseif(APPLE)
-    # macOS – EXPORT_SYMBOL macro in the source handles visibility.
-    # Also strip dead code.
-    target_link_options(neuron_dummy_plugin_ep PRIVATE
-        "-Xlinker" "-dead_strip"
-    )
-elseif(WIN32)
-    # Windows – .def file controls exports.
-    target_link_options(neuron_dummy_plugin_ep PRIVATE
-        "-DEF:${CMAKE_SOURCE_DIR}/neuron_dummy_plugin_ep.def"
-    )
-endif()
+# Linux – use version script to export only CreateEpFactories/ReleaseEpFactory.
+target_link_options(neuron_dummy_plugin_ep PRIVATE
+    "-Wl,--version-script=${CMAKE_SOURCE_DIR}/neuron_dummy_plugin_ep.lds"
+    "-Wl,--no-undefined"
+    "-Wl,--gc-sections"
+    "-Wl,-z,noexecstack"
+)
 
 # Default symbol visibility: hidden (no leaking of C++ internals).
 set_target_properties(neuron_dummy_plugin_ep PROPERTIES
@@ -122,8 +101,7 @@ endif()
 # Install
 # ---------------------------------------------------------------------------
 install(TARGETS neuron_dummy_plugin_ep
-        LIBRARY  DESTINATION lib
-        RUNTIME  DESTINATION bin)
+        LIBRARY DESTINATION lib)
 
 message(STATUS "NeuronDummyPluginEP build:")
 message(STATUS "  ORT root       : ${ONNXRUNTIME_ROOT}")

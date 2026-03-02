@@ -58,12 +58,7 @@
 // Logging macros (require members `api_` and `logger_` in scope)
 // ---------------------------------------------------------------------------
 
-#ifdef _WIN32
-#define EP_WSTR(x) L##x
-#define EP_FILE EP_WSTR(__FILE__)
-#else
 #define EP_FILE __FILE__
-#endif
 
 #define NEURON_LOG(level, ...)                                                       \
   do {                                                                               \
