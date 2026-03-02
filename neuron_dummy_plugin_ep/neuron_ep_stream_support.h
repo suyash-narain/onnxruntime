@@ -7,7 +7,7 @@
 
 #include "neuron_ep_utils.h"
 
-class NeuronEpFactory;  // forward declare
+#include "neuron_ep_factory.h"
 
 // ---------------------------------------------------------------------------
 // NeuronStreamImpl
