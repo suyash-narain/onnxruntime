@@ -85,10 +85,10 @@ endif()
 if(UNIX AND NOT APPLE)
     # Linux – use version script
     target_link_options(neuron_dummy_plugin_ep PRIVATE
-        "-Xlinker" "--version-script=${CMAKE_SOURCE_DIR}/neuron_dummy_plugin_ep.lds"
-        "-Xlinker" "--no-undefined"
-        "-Xlinker" "--gc-sections"
-        "-z" "noexecstack"
+        "-Wl,--version-script=${CMAKE_SOURCE_DIR}/neuron_dummy_plugin_ep.lds"
+        "-Wl,--no-undefined"
+        "-Wl,--gc-sections"
+        "-Wl,-z,noexecstack"
     )
 elseif(APPLE)
     # macOS – EXPORT_SYMBOL macro in the source handles visibility.
