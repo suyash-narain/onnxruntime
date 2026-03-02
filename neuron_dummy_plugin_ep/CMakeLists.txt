@@ -57,14 +57,27 @@ target_include_directories(neuron_dummy_plugin_ep PRIVATE
     "${CMAKE_SOURCE_DIR}"   # so #include "neuron_ep_utils.h" works
 )
 
-# Link against onnxruntime shared library.
-# find_library() honours CMAKE_FIND_ROOT_PATH when cross-compiling.
+# Link against onnxruntime shared library (optional).
+# A plugin EP is loaded by ORT at runtime via dlopen(), so ORT symbols are
+# already present in the process. We only link if the .so is found, otherwise
+# we rely on runtime resolution (--allow-shlib-undefined).
 find_library(ONNXRUNTIME_LIB
     NAMES onnxruntime
     HINTS "${ONNXRUNTIME_LIB_DIR}"
-    REQUIRED)
+)
 
-target_link_libraries(neuron_dummy_plugin_ep PRIVATE ${ONNXRUNTIME_LIB})
+if(ONNXRUNTIME_LIB)
+    target_link_libraries(neuron_dummy_plugin_ep PRIVATE ${ONNXRUNTIME_LIB})
+    message(STATUS "  Linking against : ${ONNXRUNTIME_LIB}")
+else()
+    message(STATUS "  libonnxruntime.so not found - relying on runtime symbol resolution")
+    # Allow undefined ORT symbols; they are provided by the host ORT process.
+    if(UNIX AND NOT APPLE)
+        target_link_options(neuron_dummy_plugin_ep PRIVATE
+            "-Wl,--allow-shlib-undefined"
+        )
+    endif()
+endif()
 
 # ---------------------------------------------------------------------------
 # Symbol visibility (hide everything except CreateEpFactories/ReleaseEpFactory)
