@@ -27,11 +27,11 @@ def make_add_model(shape: list[int], output_path: str) -> None:
     )
 
     # Graph inputs
-    A = helper.make_value_info("A", TensorProto.FLOAT, shape)
-    B = helper.make_value_info("B", TensorProto.FLOAT, shape)
+    A = helper.make_tensor_value_info("A", TensorProto.FLOAT, shape)
+    B = helper.make_tensor_value_info("B", TensorProto.FLOAT, shape)
 
     # Graph output
-    C = helper.make_value_info("C", TensorProto.FLOAT, shape)
+    C = helper.make_tensor_value_info("C", TensorProto.FLOAT, shape)
 
     # Single Add node: C = A + B
     add_node = helper.make_node(
@@ -72,8 +72,8 @@ def make_add_with_constant_model(shape: list[int], output_path: str) -> None:
     weight_data = np.ones(shape, dtype=np.float32) * 0.5
 
     # Graph input: only A is live at runtime
-    A = helper.make_value_info("A", TensorProto.FLOAT, shape)
-    C = helper.make_value_info("C", TensorProto.FLOAT, shape)
+    A = helper.make_tensor_value_info("A", TensorProto.FLOAT, shape)
+    C = helper.make_tensor_value_info("C", TensorProto.FLOAT, shape)
 
     # Initializer (constant weight)
     B_init = numpy_helper.from_array(weight_data, name="B_const")
