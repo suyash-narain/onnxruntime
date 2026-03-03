@@ -19,7 +19,7 @@ The purpose is to exercise the full ORT plugin EP API surface (factory, allocato
 
 | File | What it does |
 |---|---|
-| `neuron_dummy_plugin_ep.lds` | Linux linker version script. Exports only `CreateEpFactories` and `ReleaseEpFactory`; hides everything else to prevent symbol collisions when multiple plugin EPs are loaded in the same process. |
+| `neuron_dummy_plugin_ep.lds` | Linux linker version script. Names exactly which symbols are global (`CreateEpFactories`, `ReleaseEpFactory`) and makes everything else local, preventing symbol collisions when multiple plugin EPs are loaded in the same process. Note: the version script controls symbol *binding* at link time; it cannot un-hide symbols that the compiler already marked `STV_HIDDEN` via `-fvisibility=hidden`. The two entry points therefore also carry `__attribute__((visibility("default")))` in `neuron_dummy_plugin_ep.cc`. |
 | `neuron_dummy_plugin_ep.def` | Legacy Windows DEF file listing the same two exports. Not used by the Linux build. |
 
 ### C++ source

@@ -12,8 +12,11 @@
 
 #include "neuron_ep_factory.h"
 
-// Symbol visibility is controlled by the .lds version script.
-#define EXPORT_SYMBOL
+// -fvisibility=hidden (from CXX_VISIBILITY_PRESET) hides all symbols at
+// compile time; the .lds version script cannot override that.  Explicitly
+// mark the two entry points as default visibility so they survive into the
+// dynamic symbol table.  Everything else stays hidden.
+#define EXPORT_SYMBOL __attribute__((visibility("default")))
 
 extern "C" {
 
