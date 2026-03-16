@@ -1,17 +1,15 @@
 // neuron_execution_provider_wrapper.h
-// Stable C ABI exported by libonnxruntime_provider_neuron_wrapper.so.
+// C interface implemented by neuron_impl and called directly by NeuronEp.
 //
-// This header is shared by:
-//   - The plugin EP (.so) that dlopen's the wrapper and calls through these symbols.
-//   - The wrapper .so that implements these symbols (compiled with ORT internals).
+// neuron_impl sources are compiled into the same plugin .so as the EP shell,
+// so these are ordinary linked symbols — not dlopen/dlsym.
 //
 // Design notes:
-//   - All types are ORT public C API types (OrtGraph*, OrtNode*, etc.) so the
-//     plugin EP does not need ORT internal headers.
-//   - The wrapper .so may cast OrtGraph* → const onnxruntime::GraphViewer*
+//   - All types are ORT public C API types (OrtGraph*, OrtNode*, etc.).
+//   - neuron_impl may cast OrtGraph* → const onnxruntime::GraphViewer*
 //     internally; they are the same underlying type.
 //   - OrtNodeComputeInfo objects returned by NeuronWrapper_Compile are freed
-//     via NeuronWrapper_ReleaseNodeComputeInfos; the plugin EP must not free them.
+//     via NeuronWrapper_ReleaseNodeComputeInfos; the EP shell must not free them.
 
 #pragma once
 

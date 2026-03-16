@@ -1,7 +1,6 @@
 // neuron_ep.h
 // NeuronEp: per-session execution provider.
-// Delegates GetCapability and Compile to libonnxruntime_provider_neuron_wrapper.so
-// via a stable C ABI defined in neuron_execution_provider_wrapper.h.
+// Calls NeuronWrapper_* functions directly (linked at build time).
 
 #pragma once
 
@@ -14,46 +13,12 @@
 class NeuronEpFactory;  // forward declaration
 
 // ---------------------------------------------------------------------------
-// NeuronWrapperLib
-// Manages dlopen of libonnxruntime_provider_neuron_wrapper.so and the resolved
-// function pointers.  One instance is owned by each NeuronEp (per-session).
-// ---------------------------------------------------------------------------
-struct NeuronWrapperLib {
-  using Fn_Create      = decltype(&NeuronWrapper_Create);
-  using Fn_Destroy     = decltype(&NeuronWrapper_Destroy);
-  using Fn_GetCap      = decltype(&NeuronWrapper_GetCapability);
-  using Fn_Compile     = decltype(&NeuronWrapper_Compile);
-  using Fn_Release     = decltype(&NeuronWrapper_ReleaseNodeComputeInfos);
-  using Fn_Layout      = decltype(&NeuronWrapper_GetPreferredLayout);
-  using Fn_SkipLayout  = decltype(&NeuronWrapper_ShouldSkipLayoutConversion);
-
-  Fn_Create     Create{};
-  Fn_Destroy    Destroy{};
-  Fn_GetCap     GetCapability{};
-  Fn_Compile    Compile{};
-  Fn_Release    ReleaseNodeComputeInfos{};
-  Fn_Layout     GetPreferredLayout{};
-  Fn_SkipLayout ShouldSkipLayoutConversion{};
-
-  void* lib_handle{nullptr};
-
-  ~NeuronWrapperLib();
-
-  // Load the shared library and resolve all required symbols.
-  // Returns an empty string on success or an error message on failure.
-  std::string Load(const char* lib_path);
-};
-
-// ---------------------------------------------------------------------------
 // NeuronEp
 // One instance per ORT session.  Inherits OrtEp (C vtable struct) and ApiPtrs.
 // ---------------------------------------------------------------------------
 class NeuronEp : public OrtEp, public ApiPtrs {
  public:
   struct Config {
-    // Path to the wrapper shared library.
-    std::string wrapper_lib_path{"libonnxruntime_provider_neuron_wrapper.so"};
-
     // Provider options forwarded verbatim to NeuronWrapper_Create.
     // Pointer is NOT owned; it is owned by NeuronEpFactory.
     const OrtKeyValuePairs* provider_options{nullptr};
@@ -115,6 +80,5 @@ class NeuronEp : public OrtEp, public ApiPtrs {
   Config              config_;
   const OrtLogger&    logger_;
 
-  NeuronWrapperLib    wrapper_lib_;
   NeuronWrapperHandle neuron_handle_{nullptr};
 };

@@ -1,47 +1,14 @@
 // neuron_ep.cc
 // NeuronEp implementation.
-// All graph-partitioning and compilation work is delegated to the Neuron wrapper
-// shared library (libonnxruntime_provider_neuron_wrapper.so) via dlopen.
+// Graph-partitioning and compilation are handled by calling NeuronWrapper_*
+// functions directly (linked at build time from neuron_impl sources).
 
 #include "neuron_ep.h"
 
-#include <dlfcn.h>
 #include <string>
 
 #include "neuron_ep_factory.h"
 #include "neuron_ep_stream_support.h"
-
-// ===========================================================================
-// NeuronWrapperLib
-// ===========================================================================
-
-NeuronWrapperLib::~NeuronWrapperLib() {
-  if (lib_handle) {
-    dlclose(lib_handle);
-    lib_handle = nullptr;
-  }
-}
-
-std::string NeuronWrapperLib::Load(const char* lib_path) {
-  lib_handle = dlopen(lib_path, RTLD_LAZY | RTLD_LOCAL);
-  if (!lib_handle)
-    return std::string("dlopen(") + lib_path + "): " + dlerror();
-
-#define LOAD_SYM(field, sym)                                              \
-  field = reinterpret_cast<decltype(field)>(dlsym(lib_handle, sym));     \
-  if (!field) return std::string("dlsym(" sym "): ") + dlerror()
-
-  LOAD_SYM(Create,                     "NeuronWrapper_Create");
-  LOAD_SYM(Destroy,                    "NeuronWrapper_Destroy");
-  LOAD_SYM(GetCapability,              "NeuronWrapper_GetCapability");
-  LOAD_SYM(Compile,                    "NeuronWrapper_Compile");
-  LOAD_SYM(ReleaseNodeComputeInfos,    "NeuronWrapper_ReleaseNodeComputeInfos");
-  LOAD_SYM(GetPreferredLayout,         "NeuronWrapper_GetPreferredLayout");
-  LOAD_SYM(ShouldSkipLayoutConversion, "NeuronWrapper_ShouldSkipLayoutConversion");
-
-#undef LOAD_SYM
-  return {};
-}
 
 // ===========================================================================
 // NeuronEp
@@ -59,25 +26,16 @@ NeuronEp::NeuronEp(NeuronEpFactory& factory,
       logger_{logger} {
   ort_version_supported = ORT_API_VERSION;
 
-  // Load the Neuron wrapper shared library.
-  std::string err = wrapper_lib_.Load(config_.wrapper_lib_path.c_str());
-  if (!err.empty()) {
+  // Create the per-session Neuron handle.  provider_options carries flags
+  // like NEURON_FLAG_USE_FP16, NEURON_FLAG_CPU_DISABLED, etc.
+  neuron_handle_ = NeuronWrapper_Create(
+      &ort_api, &ep_api, &model_editor_api,
+      config_.provider_options);
+  if (!neuron_handle_) {
     IGNORE_ORTSTATUS(ort_api.Logger_LogMessage(
         &logger_, ORT_LOGGING_LEVEL_ERROR,
-        (std::string("NeuronEP: failed to load wrapper: ") + err).c_str(),
+        "NeuronEP: NeuronWrapper_Create returned null",
         ORT_FILE, __LINE__, __FUNCTION__));
-  } else {
-    // Create the per-session Neuron handle.  provider_options carries flags
-    // like NEURON_FLAG_USE_FP16, NEURON_FLAG_CPU_DISABLED, etc.
-    neuron_handle_ = wrapper_lib_.Create(
-        &ort_api, &ep_api, &model_editor_api,
-        config_.provider_options);
-    if (!neuron_handle_) {
-      IGNORE_ORTSTATUS(ort_api.Logger_LogMessage(
-          &logger_, ORT_LOGGING_LEVEL_ERROR,
-          "NeuronEP: NeuronWrapper_Create returned null",
-          ORT_FILE, __LINE__, __FUNCTION__));
-    }
   }
 
   // Populate the C vtable.
@@ -97,8 +55,8 @@ NeuronEp::NeuronEp(NeuronEpFactory& factory,
 }
 
 NeuronEp::~NeuronEp() {
-  if (neuron_handle_ && wrapper_lib_.Destroy) {
-    wrapper_lib_.Destroy(neuron_handle_);
+  if (neuron_handle_) {
+    NeuronWrapper_Destroy(neuron_handle_);
     neuron_handle_ = nullptr;
   }
 }
@@ -119,13 +77,13 @@ OrtStatus* ORT_API_CALL NeuronEp::GetCapabilityImpl(OrtEp* ep_ptr,
                                                       OrtEpGraphSupportInfo* support_info) noexcept {
   auto& ep = *static_cast<NeuronEp*>(ep_ptr);
 
-  if (!ep.neuron_handle_ || !ep.wrapper_lib_.GetCapability) {
+  if (!ep.neuron_handle_) {
     return ep.ort_api.CreateStatus(
         ORT_EP_FAIL,
-        "NeuronEP: wrapper not loaded; cannot determine graph capability.");
+        "NeuronEP: handle not initialised; cannot determine graph capability.");
   }
 
-  return ep.wrapper_lib_.GetCapability(
+  return NeuronWrapper_GetCapability(
       ep.neuron_handle_, &ep.ort_api, &ep.ep_api, graph, support_info);
 }
 
@@ -142,13 +100,13 @@ OrtStatus* ORT_API_CALL NeuronEp::CompileImpl(OrtEp* ep_ptr,
                                                OrtNode** ep_context_nodes) noexcept {
   auto& ep = *static_cast<NeuronEp*>(ep_ptr);
 
-  if (!ep.neuron_handle_ || !ep.wrapper_lib_.Compile) {
+  if (!ep.neuron_handle_) {
     return ep.ort_api.CreateStatus(
         ORT_EP_FAIL,
-        "NeuronEP: wrapper not loaded; cannot compile.");
+        "NeuronEP: handle not initialised; cannot compile.");
   }
 
-  return ep.wrapper_lib_.Compile(
+  return NeuronWrapper_Compile(
       ep.neuron_handle_,
       &ep.ort_api, &ep.ep_api, &ep.model_editor_api,
       graphs, fused_nodes, count,
@@ -163,8 +121,8 @@ void ORT_API_CALL NeuronEp::ReleaseNodeComputeInfosImpl(OrtEp* ep_ptr,
                                                          OrtNodeComputeInfo** infos,
                                                          size_t num) noexcept {
   auto& ep = *static_cast<NeuronEp*>(ep_ptr);
-  if (ep.neuron_handle_ && ep.wrapper_lib_.ReleaseNodeComputeInfos) {
-    ep.wrapper_lib_.ReleaseNodeComputeInfos(ep.neuron_handle_, infos, num);
+  if (ep.neuron_handle_) {
+    NeuronWrapper_ReleaseNodeComputeInfos(ep.neuron_handle_, infos, num);
   }
 }
 
@@ -177,9 +135,9 @@ OrtStatus* ORT_API_CALL NeuronEp::GetPreferredDataLayoutImpl(
     OrtEpDataLayout* preferred_data_layout) noexcept {
   auto& ep = *static_cast<NeuronEp*>(ep_ptr);
 
-  if (ep.neuron_handle_ && ep.wrapper_lib_.GetPreferredLayout) {
+  if (ep.neuron_handle_) {
     *preferred_data_layout = static_cast<OrtEpDataLayout>(
-        ep.wrapper_lib_.GetPreferredLayout(ep.neuron_handle_));
+        NeuronWrapper_GetPreferredLayout(ep.neuron_handle_));
   } else {
     *preferred_data_layout = OrtEpDataLayout_NHWC;
   }
@@ -200,8 +158,8 @@ OrtStatus* ORT_API_CALL NeuronEp::ShouldConvertDataLayoutForOpImpl(
     int* should_convert) noexcept {
   auto& ep = *static_cast<NeuronEp*>(ep_ptr);
 
-  if (ep.neuron_handle_ && ep.wrapper_lib_.ShouldSkipLayoutConversion) {
-    int skip = ep.wrapper_lib_.ShouldSkipLayoutConversion(
+  if (ep.neuron_handle_) {
+    int skip = NeuronWrapper_ShouldSkipLayoutConversion(
         ep.neuron_handle_, domain, op_type,
         static_cast<int>(target_data_layout));
     *should_convert = skip ? 0 : 1;

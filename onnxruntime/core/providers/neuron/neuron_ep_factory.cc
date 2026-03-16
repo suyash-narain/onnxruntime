@@ -210,17 +210,6 @@ OrtStatus* ORT_API_CALL NeuronEpFactory::CreateEpImpl(
   NeuronEp::Config config;
   config.provider_options = options;  // ownership transferred to NeuronEp via factory cleanup
 
-  // Read wrapper library path from session config (optional override).
-  if (session_options) {
-    std::string lib_path;
-    RETURN_IF_ERROR(GetSessionConfigEntryOrDefault(
-        *session_options,
-        "ep.neuron.wrapper_lib_path",
-        "libonnxruntime_provider_neuron_wrapper.so",
-        lib_path));
-    config.wrapper_lib_path = lib_path;
-  }
-
   RETURN_IF_ERROR(f.ort_api.Logger_LogMessage(
       logger, ORT_LOGGING_LEVEL_INFO,
       "NeuronEP: creating session EP", ORT_FILE, __LINE__, __FUNCTION__));

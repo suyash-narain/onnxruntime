@@ -9,7 +9,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ---------------------------------------------------------------------------
 
 # Where the onnxruntime headers live.
-# Default: look next to this CMakeLists.txt for an "onnxruntime_install" subdirectory.
 # Override: cmake -DONNXRUNTIME_ROOT=/path/to/onnxruntime_install ..
 if(NOT DEFINED ONNXRUNTIME_ROOT)
   set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime_install")
@@ -26,9 +25,16 @@ if(NOT DEFINED GSL_INCLUDE_DIR)
   set(GSL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/gsl/include")
 endif()
 
+# Path to your neuron_impl source tree (builder + kernel code).
+# Override: cmake -DNEURON_IMPL_DIR=/path/to/neuron_impl ..
+if(NOT DEFINED NEURON_IMPL_DIR)
+  set(NEURON_IMPL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../neuron_impl")
+endif()
+
 # ---------------------------------------------------------------------------
 # Source files
 # ---------------------------------------------------------------------------
+# EP shell sources (in-tree).
 set(NEURON_EP_SRCS
     neuron_plugin_ep.cc
     neuron_ep_factory.cc
@@ -37,26 +43,33 @@ set(NEURON_EP_SRCS
     neuron_ep_stream_support.cc
 )
 
+# neuron_impl sources (out-of-tree builder + kernel code).
+# Collects all .cc files recursively; adjust the glob if your layout differs.
+file(GLOB_RECURSE NEURON_IMPL_SRCS "${NEURON_IMPL_DIR}/*.cc")
+if(NOT NEURON_IMPL_SRCS)
+  message(FATAL_ERROR "No neuron_impl sources found under NEURON_IMPL_DIR=${NEURON_IMPL_DIR}")
+endif()
+
 # ---------------------------------------------------------------------------
-# Library target
+# Library target  (single plugin .so = EP shell + neuron_impl)
 # ---------------------------------------------------------------------------
 # MODULE → .so with no import library (correct for plugin EPs).
-add_library(onnxruntime_providers_neuron MODULE ${NEURON_EP_SRCS})
+add_library(onnxruntime_providers_neuron MODULE
+    ${NEURON_EP_SRCS}
+    ${NEURON_IMPL_SRCS}
+)
 
-# Public ORT headers
+# Public ORT headers + neuron_impl headers.
 target_include_directories(onnxruntime_providers_neuron PRIVATE
     "${ONNXRUNTIME_ROOT}/include/onnxruntime/core/session"
     "${GSL_INCLUDE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}"   # so #include "neuron_ep_utils.h" works
+    "${CMAKE_CURRENT_SOURCE_DIR}"   # neuron_ep_utils.h etc.
+    "${NEURON_IMPL_DIR}"            # neuron_impl internal headers
 )
 
-# Link dl for dlopen (used to load libonnxruntime_provider_neuron_wrapper.so).
-target_link_libraries(onnxruntime_providers_neuron PRIVATE dl)
-
 # Link against onnxruntime shared library (optional).
-# A plugin EP is loaded by ORT at runtime via dlopen(), so ORT symbols are
-# already present in the process. We only link if the .so is found, otherwise
-# we rely on runtime resolution (--allow-shlib-undefined).
+# The plugin is loaded by ORT at runtime via dlopen(), so ORT symbols are
+# already present in the process. We only link explicitly if the .so is found.
 find_library(ONNXRUNTIME_LIB
     NAMES onnxruntime
     HINTS "${ONNXRUNTIME_LIB_DIR}"
@@ -106,5 +119,6 @@ message(STATUS "NeuronPluginEP build:")
 message(STATUS "  ORT root       : ${ONNXRUNTIME_ROOT}")
 message(STATUS "  ORT lib dir    : ${ONNXRUNTIME_LIB_DIR}")
 message(STATUS "  GSL include    : ${GSL_INCLUDE_DIR}")
+message(STATUS "  neuron_impl    : ${NEURON_IMPL_DIR}")
 message(STATUS "  ORT library    : ${ONNXRUNTIME_LIB}")
 message(STATUS "  Target triple  : ${CMAKE_SYSTEM_PROCESSOR}")
