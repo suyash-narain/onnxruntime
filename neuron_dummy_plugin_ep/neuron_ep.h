@@ -1,51 +1,47 @@
 // neuron_ep.h
-// Declares AddKernel (element-wise float addition) and NeuronEp (OrtEp subclass).
-// NeuronEp is the per-session execution provider object.
+// NeuronEp: per-session execution provider.
+// Delegates GetCapability and Compile to libonnxruntime_provider_neuron_wrapper.so
+// via a stable C ABI defined in neuron_execution_provider_wrapper.h.
 
 #pragma once
 
-#include <unordered_map>
 #include <memory>
 #include <string>
 
-#include <gsl/span>
 #include "neuron_ep_utils.h"
+#include "neuron_execution_provider_wrapper.h"
 
-class NeuronEpFactory;  // forward declare
+class NeuronEpFactory;  // forward declaration
 
 // ---------------------------------------------------------------------------
-// AddKernel
-// Stores per-node state for a compiled Add node.  Compute() is called at
-// every inference run.
+// NeuronWrapperLib
+// Manages dlopen of libonnxruntime_provider_neuron_wrapper.so and the resolved
+// function pointers.  One instance is owned by each NeuronEp (per-session).
 // ---------------------------------------------------------------------------
-struct AddKernel {
-  AddKernel(const OrtApi& ort_api,
-            const OrtLogger& logger,
-            const std::unordered_map<std::string, FloatInitializer>& float_initializers,
-            std::string input0_name,
-            std::string input1_name)
-      : ort_api(ort_api),
-        logger(logger),
-        float_initializers(float_initializers),
-        input0_name(std::move(input0_name)),
-        input1_name(std::move(input1_name)) {}
+struct NeuronWrapperLib {
+  using Fn_Create      = decltype(&NeuronWrapper_Create);
+  using Fn_Destroy     = decltype(&NeuronWrapper_Destroy);
+  using Fn_GetCap      = decltype(&NeuronWrapper_GetCapability);
+  using Fn_Compile     = decltype(&NeuronWrapper_Compile);
+  using Fn_Release     = decltype(&NeuronWrapper_ReleaseNodeComputeInfos);
+  using Fn_Layout      = decltype(&NeuronWrapper_GetPreferredLayout);
+  using Fn_SkipLayout  = decltype(&NeuronWrapper_ShouldSkipLayoutConversion);
 
-  // Returns saved initializer by name, or nullptr if not found.
-  const FloatInitializer* TryGetSavedInitializer(const std::string& name) const;
+  Fn_Create     Create{};
+  Fn_Destroy    Destroy{};
+  Fn_GetCap     GetCapability{};
+  Fn_Compile    Compile{};
+  Fn_Release    ReleaseNodeComputeInfos{};
+  Fn_Layout     GetPreferredLayout{};
+  Fn_SkipLayout ShouldSkipLayoutConversion{};
 
-  // Reads one input from OrtKernelContext by index.
-  void GetInputDataAndShape(Ort::KernelContext ctx, size_t idx,
-                            /*out*/ gsl::span<const float>& data,
-                            /*out*/ std::vector<int64_t>& shape) const;
+  void* lib_handle{nullptr};
 
-  // Main compute: reads inputs, writes output = A + B (element-wise).
-  OrtStatus* Compute(OrtKernelContext* kernel_ctx);
+  ~NeuronWrapperLib();
 
-  const OrtApi&                                                ort_api;
-  const OrtLogger&                                             logger;
-  const std::unordered_map<std::string, FloatInitializer>&     float_initializers;
-  std::string input0_name;
-  std::string input1_name;
+  // Load the shared library and resolve all required symbols.
+  // Returns an empty string on success or an error message on failure.
+  std::string Load(const char* lib_path);
 };
 
 // ---------------------------------------------------------------------------
@@ -55,36 +51,28 @@ struct AddKernel {
 class NeuronEp : public OrtEp, public ApiPtrs {
  public:
   struct Config {
-    // Add EP-specific session config options here.
-    // e.g.: bool use_fp16 = false;
+    // Path to the wrapper shared library.
+    std::string wrapper_lib_path{"libonnxruntime_provider_neuron_wrapper.so"};
+
+    // Provider options forwarded verbatim to NeuronWrapper_Create.
+    // Pointer is NOT owned; it is owned by NeuronEpFactory.
+    const OrtKeyValuePairs* provider_options{nullptr};
   };
 
   NeuronEp(NeuronEpFactory& factory,
-           const std::string& name,
+           const std::string& ep_name,
            const Config& config,
            const OrtLogger& logger);
 
   ~NeuronEp();
 
-  // Accessor used by NeuronNodeComputeInfo to look up kernels at run-time.
-  std::unordered_map<std::string, std::unique_ptr<AddKernel>>& AddKernels() {
-    return add_kernels_;
-  }
-
  private:
   // ---- OrtEp vtable implementations (all static, ORT_API_CALL) ------------
   static const char* ORT_API_CALL GetNameImpl(const OrtEp* ep) noexcept;
 
-  static OrtStatus* ORT_API_CALL CreateAllocatorImpl(
-      OrtEp* ep, const OrtMemoryInfo* memory_info,
-      OrtAllocator** allocator) noexcept;
-
-  static OrtStatus* ORT_API_CALL CreateSyncStreamForDeviceImpl(
-      OrtEp* ep, const OrtMemoryDevice* memory_device,
-      OrtSyncStreamImpl** stream) noexcept;
-
   static OrtStatus* ORT_API_CALL GetCapabilityImpl(
-      OrtEp* ep, const OrtGraph* graph,
+      OrtEp* ep,
+      const OrtGraph* graph,
       OrtEpGraphSupportInfo* support_info) noexcept;
 
   static OrtStatus* ORT_API_CALL CompileImpl(
@@ -96,20 +84,37 @@ class NeuronEp : public OrtEp, public ApiPtrs {
       OrtNode** ep_context_nodes) noexcept;
 
   static void ORT_API_CALL ReleaseNodeComputeInfosImpl(
-      OrtEp* ep, OrtNodeComputeInfo** infos, size_t num) noexcept;
+      OrtEp* ep,
+      OrtNodeComputeInfo** infos,
+      size_t num) noexcept;
 
-  // Iterates graph initializers and saves constant float tensors.
-  OrtStatus* SaveConstantInitializers(const OrtGraph* graph);
+  static OrtStatus* ORT_API_CALL GetPreferredDataLayoutImpl(
+      OrtEp* ep,
+      OrtEpDataLayout* preferred_data_layout) noexcept;
+
+  static OrtStatus* ORT_API_CALL ShouldConvertDataLayoutForOpImpl(
+      OrtEp* ep,
+      const char* domain,
+      const char* op_type,
+      OrtEpDataLayout target_data_layout,
+      int* should_convert) noexcept;
+
+  static OrtStatus* ORT_API_CALL CreateAllocatorImpl(
+      OrtEp* ep,
+      const OrtMemoryInfo* memory_info,
+      OrtAllocator** allocator) noexcept;
+
+  static OrtStatus* ORT_API_CALL CreateSyncStreamForDeviceImpl(
+      OrtEp* ep,
+      const OrtMemoryDevice* memory_device,
+      OrtSyncStreamImpl** stream) noexcept;
 
   // ---- Per-session state --------------------------------------------------
-  NeuronEpFactory& factory_;
-  std::string      name_;
-  Config           config_{};
-  const OrtLogger& logger_;
+  NeuronEpFactory&    factory_;
+  std::string         name_;
+  Config              config_;
+  const OrtLogger&    logger_;
 
-  // Map: fused-node-name → compiled AddKernel
-  std::unordered_map<std::string, std::unique_ptr<AddKernel>> add_kernels_;
-
-  // Saved weights (constant initializers dropped from ORT's graph after Compile)
-  std::unordered_map<std::string, FloatInitializer> float_initializers_;
+  NeuronWrapperLib    wrapper_lib_;
+  NeuronWrapperHandle neuron_handle_{nullptr};
 };

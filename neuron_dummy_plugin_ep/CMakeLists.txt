@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(NeuronDummyPluginEP CXX)
+project(NeuronPluginEP CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,8 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ---------------------------------------------------------------------------
 
 # Where the onnxruntime headers live.
-# Default: look next to this CMakeLists.txt for an "onnxruntime" subdirectory
-# (useful if you copy the install tree next to the source).
+# Default: look next to this CMakeLists.txt for an "onnxruntime_install" subdirectory.
 # Override: cmake -DONNXRUNTIME_ROOT=/path/to/onnxruntime_install ..
 if(NOT DEFINED ONNXRUNTIME_ROOT)
   set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/onnxruntime_install")
@@ -41,15 +40,18 @@ set(NEURON_EP_SRCS
 # ---------------------------------------------------------------------------
 # Library target
 # ---------------------------------------------------------------------------
-# MODULE → .so with no import library (correct for plugin EPs)
-add_library(neuron_dummy_plugin_ep MODULE ${NEURON_EP_SRCS})
+# MODULE → .so with no import library (correct for plugin EPs).
+add_library(onnxruntime_providers_neuron MODULE ${NEURON_EP_SRCS})
 
 # Public ORT headers
-target_include_directories(neuron_dummy_plugin_ep PRIVATE
+target_include_directories(onnxruntime_providers_neuron PRIVATE
     "${ONNXRUNTIME_ROOT}/include/onnxruntime/core/session"
     "${GSL_INCLUDE_DIR}"
     "${CMAKE_SOURCE_DIR}"   # so #include "neuron_ep_utils.h" works
 )
+
+# Link dl for dlopen (used to load libonnxruntime_provider_neuron_wrapper.so).
+target_link_libraries(onnxruntime_providers_neuron PRIVATE dl)
 
 # Link against onnxruntime shared library (optional).
 # A plugin EP is loaded by ORT at runtime via dlopen(), so ORT symbols are
@@ -61,12 +63,11 @@ find_library(ONNXRUNTIME_LIB
 )
 
 if(ONNXRUNTIME_LIB)
-    target_link_libraries(neuron_dummy_plugin_ep PRIVATE ${ONNXRUNTIME_LIB})
+    target_link_libraries(onnxruntime_providers_neuron PRIVATE ${ONNXRUNTIME_LIB})
     message(STATUS "  Linking against : ${ONNXRUNTIME_LIB}")
 else()
     message(STATUS "  libonnxruntime.so not found - relying on runtime symbol resolution")
-    # Allow undefined ORT symbols; they are provided by the host ORT process.
-    target_link_options(neuron_dummy_plugin_ep PRIVATE
+    target_link_options(onnxruntime_providers_neuron PRIVATE
         "-Wl,--allow-shlib-undefined"
     )
 endif()
@@ -74,16 +75,14 @@ endif()
 # ---------------------------------------------------------------------------
 # Symbol visibility (hide everything except CreateEpFactories/ReleaseEpFactory)
 # ---------------------------------------------------------------------------
-# Linux – use version script to export only CreateEpFactories/ReleaseEpFactory.
-target_link_options(neuron_dummy_plugin_ep PRIVATE
+target_link_options(onnxruntime_providers_neuron PRIVATE
     "-Wl,--version-script=${CMAKE_SOURCE_DIR}/neuron_dummy_plugin_ep.lds"
     "-Wl,--no-undefined"
     "-Wl,--gc-sections"
     "-Wl,-z,noexecstack"
 )
 
-# Default symbol visibility: hidden (no leaking of C++ internals).
-set_target_properties(neuron_dummy_plugin_ep PROPERTIES
+set_target_properties(onnxruntime_providers_neuron PROPERTIES
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
 )
@@ -92,7 +91,7 @@ set_target_properties(neuron_dummy_plugin_ep PROPERTIES
 # Compiler warnings
 # ---------------------------------------------------------------------------
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(neuron_dummy_plugin_ep PRIVATE
+    target_compile_options(onnxruntime_providers_neuron PRIVATE
         -Wall -Wextra -Wno-unused-parameter
     )
 endif()
@@ -100,10 +99,10 @@ endif()
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
-install(TARGETS neuron_dummy_plugin_ep
+install(TARGETS onnxruntime_providers_neuron
         LIBRARY DESTINATION lib)
 
-message(STATUS "NeuronDummyPluginEP build:")
+message(STATUS "NeuronPluginEP build:")
 message(STATUS "  ORT root       : ${ONNXRUNTIME_ROOT}")
 message(STATUS "  ORT lib dir    : ${ONNXRUNTIME_LIB_DIR}")
 message(STATUS "  GSL include    : ${GSL_INCLUDE_DIR}")

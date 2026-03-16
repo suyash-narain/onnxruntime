@@ -1,169 +1,94 @@
 // neuron_ep.cc
-// Implementation of AddKernel and NeuronEp.
+// NeuronEp implementation.
+// All graph-partitioning and compilation work is delegated to the Neuron wrapper
+// shared library (libonnxruntime_provider_neuron_wrapper.so) via dlopen.
 
 #include "neuron_ep.h"
 
-#include <cassert>
-#include <cstring>
-#include <memory>
+#include <dlfcn.h>
 #include <string>
-#include <vector>
 
 #include "neuron_ep_factory.h"
 #include "neuron_ep_stream_support.h"
 
 // ===========================================================================
-// AddKernel
+// NeuronWrapperLib
 // ===========================================================================
 
-const FloatInitializer* AddKernel::TryGetSavedInitializer(const std::string& name) const {
-  auto it = float_initializers.find(name);
-  return it != float_initializers.end() ? &it->second : nullptr;
+NeuronWrapperLib::~NeuronWrapperLib() {
+  if (lib_handle) {
+    dlclose(lib_handle);
+    lib_handle = nullptr;
+  }
 }
 
-void AddKernel::GetInputDataAndShape(Ort::KernelContext ctx, size_t idx,
-                                     gsl::span<const float>& data,
-                                     std::vector<int64_t>& shape) const {
-  Ort::ConstValue v = ctx.GetInput(idx);
-  auto ts = v.GetTensorTypeAndShapeInfo();
-  if (ts.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
-    throw Ort::Exception("NeuronEP: expected float32 input", ORT_EP_FAIL);
-  data  = gsl::span<const float>(v.GetTensorData<float>(), ts.GetElementCount());
-  shape = ts.GetShape();
+std::string NeuronWrapperLib::Load(const char* lib_path) {
+  lib_handle = dlopen(lib_path, RTLD_LAZY | RTLD_LOCAL);
+  if (!lib_handle)
+    return std::string("dlopen(") + lib_path + "): " + dlerror();
+
+#define LOAD_SYM(field, sym)                                              \
+  field = reinterpret_cast<decltype(field)>(dlsym(lib_handle, sym));     \
+  if (!field) return std::string("dlsym(" sym "): ") + dlerror()
+
+  LOAD_SYM(Create,                     "NeuronWrapper_Create");
+  LOAD_SYM(Destroy,                    "NeuronWrapper_Destroy");
+  LOAD_SYM(GetCapability,              "NeuronWrapper_GetCapability");
+  LOAD_SYM(Compile,                    "NeuronWrapper_Compile");
+  LOAD_SYM(ReleaseNodeComputeInfos,    "NeuronWrapper_ReleaseNodeComputeInfos");
+  LOAD_SYM(GetPreferredLayout,         "NeuronWrapper_GetPreferredLayout");
+  LOAD_SYM(ShouldSkipLayoutConversion, "NeuronWrapper_ShouldSkipLayoutConversion");
+
+#undef LOAD_SYM
+  return {};
 }
-
-OrtStatus* AddKernel::Compute(OrtKernelContext* kernel_ctx) {
-  RETURN_IF_ERROR(ort_api.Logger_LogMessage(&logger,
-                                            ORT_LOGGING_LEVEL_INFO,
-                                            "AddKernel::Compute",
-                                            ORT_FILE, __LINE__, __FUNCTION__));
-  Ort::KernelContext ctx(kernel_ctx);
-  try {
-    gsl::span<const float> input0, input1;
-    std::vector<int64_t>   shape0, shape1;
-
-    size_t num_inputs = ctx.GetInputCount();
-
-    if (num_inputs == 2) {
-      // Both are live tensors from ORT.
-      GetInputDataAndShape(ctx, 0, input0, shape0);
-      GetInputDataAndShape(ctx, 1, input1, shape1);
-    } else if (num_inputs == 1) {
-      // One input was a constant initializer we saved during Compile().
-      // ORT dropped it because we set drop_constant_initializers = true.
-      if (const FloatInitializer* c0 = TryGetSavedInitializer(input0_name)) {
-        GetInputDataAndShape(ctx, 0, input1, shape1);
-        input0 = gsl::span<const float>(c0->data);
-        shape0 = c0->shape;
-      } else if (const FloatInitializer* c1 = TryGetSavedInitializer(input1_name)) {
-        GetInputDataAndShape(ctx, 0, input0, shape0);
-        input1 = gsl::span<const float>(c1->data);
-        shape1 = c1->shape;
-      } else {
-        return ort_api.CreateStatus(ORT_EP_FAIL, "AddKernel: single input but no saved initializer found");
-      }
-    } else {
-      // Both are constants (constant-folding disabled).
-      const FloatInitializer* c0 = TryGetSavedInitializer(input0_name);
-      const FloatInitializer* c1 = TryGetSavedInitializer(input1_name);
-      RETURN_IF(!c0 || !c1, ort_api, "AddKernel: 0 live inputs but saved initializers missing");
-      input0 = gsl::span<const float>(c0->data); shape0 = c0->shape;
-      input1 = gsl::span<const float>(c1->data); shape1 = c1->shape;
-    }
-
-    if (shape0 != shape1)
-      throw Ort::Exception("NeuronEP AddKernel: shape mismatch", ORT_INVALID_ARGUMENT);
-    if (ctx.GetOutputCount() != 1)
-      throw Ort::Exception("NeuronEP AddKernel: expected 1 output", ORT_INVALID_ARGUMENT);
-
-    auto output = ctx.GetOutput(0, shape0);
-    float* out_data = output.GetTensorMutableData<float>();
-
-    for (size_t i = 0; i < input0.size(); ++i)
-      out_data[i] = input0[i] + input1[i];   // ← the actual Add computation
-
-  } catch (const Ort::Exception& ex) {
-    return Ort::Status(ex).release();
-  } catch (const std::exception& ex) {
-    return Ort::Status(ex.what(), ORT_EP_FAIL).release();
-  }
-  return nullptr;
-}
-
-// ===========================================================================
-// NeuronNodeComputeInfo
-// Returned by Compile() for each fused node.  ORT calls these three functions
-// at session-run time: CreateState → Compute → ReleaseState.
-// ===========================================================================
-
-// Polymorphic base so ReleaseNodeComputeInfosImpl can delete via base pointer.
-struct NeuronNodeComputeInfoBase : OrtNodeComputeInfo {
-  virtual ~NeuronNodeComputeInfoBase() = default;
-};
-
-struct NeuronNodeComputeInfo : NeuronNodeComputeInfoBase {
-  explicit NeuronNodeComputeInfo(NeuronEp& ep) : ep(ep) {
-    ort_version_supported = ORT_API_VERSION;
-    CreateState  = CreateStateImpl;
-    Compute      = ComputeImpl;
-    ReleaseState = ReleaseStateImpl;
-  }
-
-  // Called once at session-run start: look up the right AddKernel.
-  static OrtStatus* ORT_API_CALL CreateStateImpl(OrtNodeComputeInfo* this_ptr,
-                                                  OrtNodeComputeContext* ctx,
-                                                  void** compute_state) {
-    auto* nci = static_cast<NeuronNodeComputeInfo*>(this_ptr);
-    NeuronEp& ep = nci->ep;
-
-    std::string node_name = ep.ep_api.NodeComputeContext_NodeName(ctx);
-    auto it = ep.AddKernels().find(node_name);
-    if (it == ep.AddKernels().end()) {
-      std::string msg = "NeuronEP: no AddKernel for fused node '" + node_name + "'";
-      return ep.ort_api.CreateStatus(ORT_EP_FAIL, msg.c_str());
-    }
-    *compute_state = it->second.get();
-    return nullptr;
-  }
-
-  // Called every inference run.
-  static OrtStatus* ORT_API_CALL ComputeImpl(OrtNodeComputeInfo* /*this_ptr*/,
-                                              void* compute_state,
-                                              OrtKernelContext* kernel_ctx) {
-    return reinterpret_cast<AddKernel*>(compute_state)->Compute(kernel_ctx);
-  }
-
-  // Called at session destruction (nothing to do; kernel owned by NeuronEp).
-  static void ORT_API_CALL ReleaseStateImpl(OrtNodeComputeInfo* /*this_ptr*/,
-                                             void* /*compute_state*/) {}
-
-  NeuronEp& ep;
-};
 
 // ===========================================================================
 // NeuronEp
 // ===========================================================================
 
 NeuronEp::NeuronEp(NeuronEpFactory& factory,
-                   const std::string& name,
+                   const std::string& ep_name,
                    const Config& config,
                    const OrtLogger& logger)
     : OrtEp{},
       ApiPtrs{static_cast<const ApiPtrs&>(factory)},
       factory_{factory},
-      name_{name},
+      name_{ep_name},
       config_{config},
       logger_{logger} {
-  // Tell ORT which API version we were compiled with.
   ort_version_supported = ORT_API_VERSION;
 
-  // Populate the C vtable (function pointers on OrtEp).
+  // Load the Neuron wrapper shared library.
+  std::string err = wrapper_lib_.Load(config_.wrapper_lib_path.c_str());
+  if (!err.empty()) {
+    IGNORE_ORTSTATUS(ort_api.Logger_LogMessage(
+        &logger_, ORT_LOGGING_LEVEL_ERROR,
+        (std::string("NeuronEP: failed to load wrapper: ") + err).c_str(),
+        ORT_FILE, __LINE__, __FUNCTION__));
+  } else {
+    // Create the per-session Neuron handle.  provider_options carries flags
+    // like NEURON_FLAG_USE_FP16, NEURON_FLAG_CPU_DISABLED, etc.
+    neuron_handle_ = wrapper_lib_.Create(
+        &ort_api, &ep_api, &model_editor_api,
+        config_.provider_options);
+    if (!neuron_handle_) {
+      IGNORE_ORTSTATUS(ort_api.Logger_LogMessage(
+          &logger_, ORT_LOGGING_LEVEL_ERROR,
+          "NeuronEP: NeuronWrapper_Create returned null",
+          ORT_FILE, __LINE__, __FUNCTION__));
+    }
+  }
+
+  // Populate the C vtable.
   GetName                      = GetNameImpl;
   GetCapability                = GetCapabilityImpl;
   Compile                      = CompileImpl;
   ReleaseNodeComputeInfos      = ReleaseNodeComputeInfosImpl;
-  CreateAllocator              = CreateAllocatorImpl;             // optional
-  CreateSyncStreamForDevice    = CreateSyncStreamForDeviceImpl;   // optional
+  GetPreferredDataLayout       = GetPreferredDataLayoutImpl;
+  ShouldConvertDataLayoutForOp = ShouldConvertDataLayoutForOpImpl;
+  CreateAllocator              = CreateAllocatorImpl;
+  CreateSyncStreamForDevice    = CreateSyncStreamForDeviceImpl;
 
   IGNORE_ORTSTATUS(ort_api.Logger_LogMessage(
       &logger_, ORT_LOGGING_LEVEL_INFO,
@@ -171,7 +96,12 @@ NeuronEp::NeuronEp(NeuronEpFactory& factory,
       ORT_FILE, __LINE__, __FUNCTION__));
 }
 
-NeuronEp::~NeuronEp() = default;
+NeuronEp::~NeuronEp() {
+  if (neuron_handle_ && wrapper_lib_.Destroy) {
+    wrapper_lib_.Destroy(neuron_handle_);
+    neuron_handle_ = nullptr;
+  }
+}
 
 // ---- GetName ---------------------------------------------------------------
 /*static*/
@@ -179,173 +109,118 @@ const char* ORT_API_CALL NeuronEp::GetNameImpl(const OrtEp* ep) noexcept {
   return static_cast<const NeuronEp*>(ep)->name_.c_str();
 }
 
-// ---- SaveConstantInitializers ----------------------------------------------
-OrtStatus* NeuronEp::SaveConstantInitializers(const OrtGraph* ort_graph) {
-  Ort::ConstGraph graph{ort_graph};
-  try {
-    for (const auto& init : graph.GetInitializers()) {
-      if (!init.IsConstantInitializer()) continue;
-
-      std::string name = init.GetName();
-      Ort::ConstValue val;
-      {
-        auto st = init.GetInitializer(val);
-        if (!st.IsOK()) return st.release();
-      }
-
-      auto ts = val.GetTensorTypeAndShapeInfo();
-      if (ts.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT)
-        continue;  // only handle float weights in this example
-
-      const float* data = val.GetTensorData<float>();
-      std::vector<int64_t> dims = ts.GetShape();
-      size_t n = ts.GetElementCount();
-
-      float_initializers_.emplace(name, FloatInitializer{dims, {data, data + n}});
-    }
-  } catch (const Ort::Exception& ex) {
-    return Ort::Status(ex).release();
-  } catch (const std::exception& ex) {
-    return Ort::Status(ex.what(), ORT_EP_FAIL).release();
-  }
-  return nullptr;
-}
-
 // ---- GetCapability ---------------------------------------------------------
-// ORT calls this during graph partitioning.  We walk the graph looking for
-// Add nodes with float inputs of equal static shape.
+// ORT calls this during graph partitioning.  We delegate to the wrapper which
+// walks the graph using internal ORT types and registers supported subgraphs
+// via ep_api->EpGraphSupportInfo_AddNodesToFuse().
 /*static*/
 OrtStatus* ORT_API_CALL NeuronEp::GetCapabilityImpl(OrtEp* ep_ptr,
-                                                     const OrtGraph* ort_graph,
-                                                     OrtEpGraphSupportInfo* support_info) noexcept {
-  try {
-    NeuronEp* ep    = static_cast<NeuronEp*>(ep_ptr);
-    Ort::ConstGraph graph{ort_graph};
-    auto nodes = graph.GetNodes();
-    if (nodes.empty()) return nullptr;
+                                                      const OrtGraph* graph,
+                                                      OrtEpGraphSupportInfo* support_info) noexcept {
+  auto& ep = *static_cast<NeuronEp*>(ep_ptr);
 
-    for (const auto& node : nodes) {
-      if (node.GetOperatorType() != std::string("Add")) continue;
-      if (node.GetDomain()       != std::string(""))    continue;  // standard ONNX domain
-
-      auto inputs  = node.GetInputs();
-      auto outputs = node.GetOutputs();
-      if (inputs.size() != 2 || outputs.size() != 1) continue;
-
-      // Both inputs and the output must be float.
-      bool f0, f1, fo;
-      IsFloatTensor(inputs[0], f0);
-      IsFloatTensor(inputs[1], f1);
-      IsFloatTensor(outputs[0], fo);
-      if (!f0 || !f1 || !fo) continue;
-
-      // Require static, equal shapes (no broadcasting in this example).
-      auto s0 = GetTensorShape(inputs[0]);
-      auto s1 = GetTensorShape(inputs[1]);
-      if (!s0 || !s1) continue;
-      if (!AreShapesStaticAndEqual(*s0, *s1)) continue;
-
-      // Tell ORT: fuse this node into a subgraph for us to compile.
-      // drop_constant_initializers = true → we will save weights in Compile()
-      //                              and ORT need not pass them at inference time.
-      OrtNodeFusionOptions opts{};
-      opts.ort_version_supported      = ORT_API_VERSION;
-      opts.drop_constant_initializers = true;
-
-      const OrtNode* raw = node;
-      RETURN_IF_ERROR(ep->ep_api.EpGraphSupportInfo_AddNodesToFuse(
-          support_info, &raw, 1, &opts));
-
-      break;  // This EP compiles one Add at a time (same pattern as example_plugin_ep).
-    }
-  } catch (const Ort::Exception& ex) {
-    return Ort::Status(ex).release();
-  } catch (const std::exception& ex) {
-    return Ort::Status(ex.what(), ORT_EP_FAIL).release();
+  if (!ep.neuron_handle_ || !ep.wrapper_lib_.GetCapability) {
+    return ep.ort_api.CreateStatus(
+        ORT_EP_FAIL,
+        "NeuronEP: wrapper not loaded; cannot determine graph capability.");
   }
-  return nullptr;
+
+  return ep.wrapper_lib_.GetCapability(
+      ep.neuron_handle_, &ep.ort_api, &ep.ep_api, graph, support_info);
 }
 
 // ---- Compile ---------------------------------------------------------------
-// ORT calls this once per fused subgraph.  We create an AddKernel and return
-// a NeuronNodeComputeInfo so ORT knows how to run inference.
+// ORT calls this once per fused subgraph after partitioning.  The wrapper
+// compiles the subgraph via the Neuron SDK and returns OrtNodeComputeInfo
+// objects that ORT invokes at inference time.
 /*static*/
 OrtStatus* ORT_API_CALL NeuronEp::CompileImpl(OrtEp* ep_ptr,
-                                               const OrtGraph** ort_graphs,
+                                               const OrtGraph** graphs,
                                                const OrtNode** fused_nodes,
                                                size_t count,
                                                OrtNodeComputeInfo** node_compute_infos,
-                                               OrtNode** /*ep_context_nodes*/) noexcept {
-  try {
-    if (count != 1) {
-      return Ort::Status("NeuronEP: expected to compile exactly one graph", ORT_EP_FAIL).release();
-    }
+                                               OrtNode** ep_context_nodes) noexcept {
+  auto& ep = *static_cast<NeuronEp*>(ep_ptr);
 
-    NeuronEp* ep = static_cast<NeuronEp*>(ep_ptr);
+  if (!ep.neuron_handle_ || !ep.wrapper_lib_.Compile) {
+    return ep.ort_api.CreateStatus(
+        ORT_EP_FAIL,
+        "NeuronEP: wrapper not loaded; cannot compile.");
+  }
 
-    // Step 1: save any constant initializers before ORT releases them.
-    RETURN_IF_ERROR(ep->SaveConstantInitializers(ort_graphs[0]));
+  return ep.wrapper_lib_.Compile(
+      ep.neuron_handle_,
+      &ep.ort_api, &ep.ep_api, &ep.model_editor_api,
+      graphs, fused_nodes, count,
+      node_compute_infos, ep_context_nodes);
+}
 
-    // Step 2: get the single node inside this subgraph.
-    Ort::ConstGraph graph{ort_graphs[0]};
-    auto sub_nodes = graph.GetNodes();
-    if (sub_nodes.size() != 1)
-      return Ort::Status("NeuronEP: expected subgraph with exactly one node", ORT_EP_FAIL).release();
+// ---- ReleaseNodeComputeInfos -----------------------------------------------
+// Free the OrtNodeComputeInfo objects that were allocated by Compile().
+// The wrapper is responsible for the actual deallocation since it allocated them.
+/*static*/
+void ORT_API_CALL NeuronEp::ReleaseNodeComputeInfosImpl(OrtEp* ep_ptr,
+                                                         OrtNodeComputeInfo** infos,
+                                                         size_t num) noexcept {
+  auto& ep = *static_cast<NeuronEp*>(ep_ptr);
+  if (ep.neuron_handle_ && ep.wrapper_lib_.ReleaseNodeComputeInfos) {
+    ep.wrapper_lib_.ReleaseNodeComputeInfos(ep.neuron_handle_, infos, num);
+  }
+}
 
-    if (sub_nodes[0].GetOperatorType() != std::string("Add"))
-      return Ort::Status("NeuronEP: expected Add node in subgraph", ORT_EP_FAIL).release();
+// ---- GetPreferredDataLayout ------------------------------------------------
+// Replaces IExecutionProvider::GetPreferredLayout() from v1.20.2.
+// Returns NHWC for Neuron (typical for mobile NPUs).
+/*static*/
+OrtStatus* ORT_API_CALL NeuronEp::GetPreferredDataLayoutImpl(
+    OrtEp* ep_ptr,
+    OrtEpDataLayout* preferred_data_layout) noexcept {
+  auto& ep = *static_cast<NeuronEp*>(ep_ptr);
 
-    // Step 3: validate fused node is assigned to this EP.
-    Ort::ConstNode fused{fused_nodes[0]};
-    if (std::string(fused.GetEpName()) != ep->name_)
-      return Ort::Status("NeuronEP: fused node is not assigned to this EP", ORT_EP_FAIL).release();
-
-    std::string fused_name = fused.GetName();
-
-    // Step 4: get Add's input names (for the saved-initializer lookup at runtime).
-    auto add_inputs = sub_nodes[0].GetInputs();
-    if (add_inputs.size() != 2)
-      return Ort::Status("NeuronEP: Add node must have exactly 2 inputs", ORT_EP_FAIL).release();
-
-    std::string input0_name = add_inputs[0].GetName();
-    std::string input1_name = add_inputs[1].GetName();
-
-    // Step 5: create kernel and wrap it in NeuronNodeComputeInfo.
-    ep->add_kernels_.emplace(fused_name,
-                             std::make_unique<AddKernel>(ep->ort_api,
-                                                         ep->logger_,
-                                                         ep->float_initializers_,
-                                                         input0_name,
-                                                         input1_name));
-
-    auto nci = std::make_unique<NeuronNodeComputeInfo>(*ep);
-    node_compute_infos[0] = nci.release();
-
-  } catch (const Ort::Exception& ex) {
-    return Ort::Status(ex).release();
-  } catch (const std::exception& ex) {
-    return Ort::Status(ex.what(), ORT_EP_FAIL).release();
+  if (ep.neuron_handle_ && ep.wrapper_lib_.GetPreferredLayout) {
+    *preferred_data_layout = static_cast<OrtEpDataLayout>(
+        ep.wrapper_lib_.GetPreferredLayout(ep.neuron_handle_));
+  } else {
+    *preferred_data_layout = OrtEpDataLayout_NHWC;
   }
   return nullptr;
 }
 
-// ---- ReleaseNodeComputeInfos -----------------------------------------------
+// ---- ShouldConvertDataLayoutForOp ------------------------------------------
+// Replaces the ORT-core ort_transpose_optimization.cc Softmax patch from
+// v1.20.2.  The old patch registered a global handler that returned false for
+// Softmax; this vtable function achieves the same effect per-EP without
+// patching ORT core.
 /*static*/
-void ORT_API_CALL NeuronEp::ReleaseNodeComputeInfosImpl(OrtEp* /*ep*/,
-                                                         OrtNodeComputeInfo** infos,
-                                                         size_t num) noexcept {
-  for (size_t i = 0; i < num; ++i)
-    delete static_cast<NeuronNodeComputeInfoBase*>(infos[i]);
+OrtStatus* ORT_API_CALL NeuronEp::ShouldConvertDataLayoutForOpImpl(
+    OrtEp* ep_ptr,
+    const char* domain,
+    const char* op_type,
+    OrtEpDataLayout target_data_layout,
+    int* should_convert) noexcept {
+  auto& ep = *static_cast<NeuronEp*>(ep_ptr);
+
+  if (ep.neuron_handle_ && ep.wrapper_lib_.ShouldSkipLayoutConversion) {
+    int skip = ep.wrapper_lib_.ShouldSkipLayoutConversion(
+        ep.neuron_handle_, domain, op_type,
+        static_cast<int>(target_data_layout));
+    *should_convert = skip ? 0 : 1;
+  } else {
+    // Default: allow conversion (return value > 0).
+    *should_convert = 1;
+  }
+  return nullptr;
 }
 
-// ---- CreateAllocator (per-session, optional) --------------------------------
+// ---- CreateAllocator -------------------------------------------------------
+// Delegates to the factory's shared allocator (malloc/free backed).
+// Neuron EP uses CPU-accessible memory so no device-specific allocator needed.
 /*static*/
 OrtStatus* ORT_API_CALL NeuronEp::CreateAllocatorImpl(OrtEp* ep_ptr,
                                                        const OrtMemoryInfo* memory_info,
                                                        OrtAllocator** allocator) noexcept {
-  // Delegate to the factory's shared allocator logic.
-  NeuronEp* ep = static_cast<NeuronEp*>(ep_ptr);
-  return ep->factory_.CreateAllocator(&ep->factory_, memory_info, nullptr, allocator);
+  auto& ep = *static_cast<NeuronEp*>(ep_ptr);
+  return ep.factory_.CreateAllocator(&ep.factory_, memory_info, nullptr, allocator);
 }
 
 // ---- CreateSyncStreamForDevice (optional) ----------------------------------
@@ -354,17 +229,16 @@ OrtStatus* ORT_API_CALL NeuronEp::CreateSyncStreamForDeviceImpl(
     OrtEp* ep_ptr,
     const OrtMemoryDevice* memory_device,
     OrtSyncStreamImpl** stream) noexcept {
-  NeuronEp* ep = static_cast<NeuronEp*>(ep_ptr);
+  auto& ep = *static_cast<NeuronEp*>(ep_ptr);
 
-  // Only create streams for the default device memory type.
-  auto mem_type = ep->ep_api.MemoryDevice_GetMemoryType(memory_device);
+  auto mem_type = ep.ep_api.MemoryDevice_GetMemoryType(memory_device);
   if (mem_type != OrtDeviceMemoryType_DEFAULT) {
-    std::string err = "NeuronEP: stream requested for unsupported memory type: "
-                    + std::to_string(mem_type);
-    return ep->ort_api.CreateStatus(ORT_INVALID_ARGUMENT, err.c_str());
+    return ep.ort_api.CreateStatus(
+        ORT_INVALID_ARGUMENT,
+        "NeuronEP: stream requested for unsupported memory type.");
   }
 
-  auto s = std::make_unique<NeuronStreamImpl>(ep->factory_, nullptr);
+  auto s = std::make_unique<NeuronStreamImpl>(ep.factory_, nullptr);
   *stream = s.release();
   return nullptr;
 }

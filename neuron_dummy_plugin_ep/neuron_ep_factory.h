@@ -22,13 +22,10 @@ class NeuronEp;
 class NeuronEpFactory : public OrtEpFactory, public ApiPtrs {
  public:
   NeuronEpFactory(const char* ep_name, ApiPtrs apis, const OrtLogger& default_logger);
+  ~NeuronEpFactory();
 
   // Accessors used by NeuronEp / stream support.
   NeuronDataTransfer* GetDataTransfer() const { return data_transfer_.get(); }
-
-  // EP metadata strings (returned by GetVendor, GetVersion, etc.)
-  const std::string& GetEpVersionString() const { return ep_version_; }
-  uint32_t           GetVendorIdValue()    const { return vendor_id_; }
 
   const OrtLogger& default_logger_;
 
@@ -81,21 +78,27 @@ class NeuronEpFactory : public OrtEpFactory, public ApiPtrs {
 
   // ---- Factory state -------------------------------------------------------
   const std::string ep_name_;
-  const std::string vendor_{"NeuronDummy"};
-  const uint32_t    vendor_id_{0xABCD};
-  const std::string ep_version_{"0.1.0"};
 
-  // Memory info objects describing this EP's "device".
-  // We present ourselves as GPU to ORT even though this is CPU-backed,
-  // matching the pattern used by example_plugin_ep.
+  // MediaTek Neuron EP identity.
+  // Vendor ID 0x0E8D is MediaTek's PCI vendor ID.
+  const std::string vendor_{"MediaTek"};
+  const uint32_t    vendor_id_{0x0E8D};
+  const std::string ep_version_{"1.24.2.0"};
+
+  // CPU memory info: Neuron EP uses CPU-accessible memory.
+  // The NPU acceleration is internal to the Neuron SDK.
   Ort::MemoryInfo default_memory_info_;   // default device memory
   Ort::MemoryInfo readonly_memory_info_;  // for initializers / weights
 
   // Shared allocator (reference-counted across sessions).
   std::unique_ptr<CustomAllocator> shared_allocator_;
-  uint32_t    num_allocator_users_{0};
-  std::mutex  mutex_;
+  uint32_t   num_allocator_users_{0};
+  std::mutex mutex_;
 
   // Shared data-transfer object.
   std::unique_ptr<NeuronDataTransfer> data_transfer_;
+
+  // Provider-level options forwarded to each NeuronEp instance.
+  // Owned by this factory.
+  OrtKeyValuePairs* provider_options_{nullptr};
 };
