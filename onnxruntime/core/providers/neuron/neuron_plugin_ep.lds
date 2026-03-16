@@ -1,4 +1,4 @@
-/* neuron_dummy_plugin_ep.lds
+/* neuron_plugin_ep.lds
    Linux linker version script.
    Exports ONLY CreateEpFactories and ReleaseEpFactory.
    Everything else (C++ symbols, STL internals) stays hidden,

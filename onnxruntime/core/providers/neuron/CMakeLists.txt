@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Default: look next to this CMakeLists.txt for an "onnxruntime_install" subdirectory.
 # Override: cmake -DONNXRUNTIME_ROOT=/path/to/onnxruntime_install ..
 if(NOT DEFINED ONNXRUNTIME_ROOT)
-  set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/onnxruntime_install")
+  set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime_install")
 endif()
 
 # Where to find libonnxruntime.so.
@@ -23,14 +23,14 @@ endif()
 # GSL (Microsoft.GSL) include directory.
 # Override: cmake -DGSL_INCLUDE_DIR=/path/to/gsl/include ..
 if(NOT DEFINED GSL_INCLUDE_DIR)
-  set(GSL_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/gsl/include")
+  set(GSL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/gsl/include")
 endif()
 
 # ---------------------------------------------------------------------------
 # Source files
 # ---------------------------------------------------------------------------
 set(NEURON_EP_SRCS
-    neuron_dummy_plugin_ep.cc
+    neuron_plugin_ep.cc
     neuron_ep_factory.cc
     neuron_ep.cc
     neuron_ep_data_transfer.cc
@@ -47,7 +47,7 @@ add_library(onnxruntime_providers_neuron MODULE ${NEURON_EP_SRCS})
 target_include_directories(onnxruntime_providers_neuron PRIVATE
     "${ONNXRUNTIME_ROOT}/include/onnxruntime/core/session"
     "${GSL_INCLUDE_DIR}"
-    "${CMAKE_SOURCE_DIR}"   # so #include "neuron_ep_utils.h" works
+    "${CMAKE_CURRENT_SOURCE_DIR}"   # so #include "neuron_ep_utils.h" works
 )
 
 # Link dl for dlopen (used to load libonnxruntime_provider_neuron_wrapper.so).
@@ -76,7 +76,7 @@ endif()
 # Symbol visibility (hide everything except CreateEpFactories/ReleaseEpFactory)
 # ---------------------------------------------------------------------------
 target_link_options(onnxruntime_providers_neuron PRIVATE
-    "-Wl,--version-script=${CMAKE_SOURCE_DIR}/neuron_dummy_plugin_ep.lds"
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/neuron_plugin_ep.lds"
     "-Wl,--no-undefined"
     "-Wl,--gc-sections"
     "-Wl,-z,noexecstack"

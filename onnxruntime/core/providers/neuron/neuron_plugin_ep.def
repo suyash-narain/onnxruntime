@@ -1,4 +1,4 @@
-LIBRARY "neuron_dummy_plugin_ep.dll"
+LIBRARY "onnxruntime_providers_neuron.dll"
 EXPORTS
  CreateEpFactories @1
  ReleaseEpFactory  @2

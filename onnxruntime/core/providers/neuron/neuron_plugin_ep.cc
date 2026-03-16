@@ -1,4 +1,4 @@
-// neuron_dummy_plugin_ep.cc
+// neuron_plugin_ep.cc
 // DLL / shared-library entry point.
 //
 // ORT calls CreateEpFactories() immediately after dlopen().
