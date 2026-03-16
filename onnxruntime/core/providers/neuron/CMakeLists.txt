@@ -26,9 +26,14 @@ if(NOT DEFINED GSL_INCLUDE_DIR)
 endif()
 
 # Path to your neuron_impl source tree (builder + kernel code).
-# Override: cmake -DNEURON_IMPL_DIR=/path/to/neuron_impl ..
+# This is an OUT-OF-TREE directory — it lives in a separate repo and is
+# never committed inside the ORT source tree.
+# REQUIRED: cmake -DNEURON_IMPL_DIR=/path/to/neuron_impl ..
 if(NOT DEFINED NEURON_IMPL_DIR)
-  set(NEURON_IMPL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../neuron_impl")
+  message(FATAL_ERROR
+    "NEURON_IMPL_DIR is not set.\n"
+    "neuron_impl lives outside the ORT source tree. Pass its path:\n"
+    "  cmake -DNEURON_IMPL_DIR=/absolute/path/to/neuron_impl ..")
 endif()
 
 # ---------------------------------------------------------------------------
