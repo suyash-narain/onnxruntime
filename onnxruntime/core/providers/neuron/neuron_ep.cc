@@ -24,7 +24,7 @@ NeuronEp::NeuronEp(NeuronEpFactory& factory,
       name_{ep_name},
       config_{config},
       logger_{logger} {
-  ort_version_supported = ORT_API_VERSION;
+  ort_version_supported = NEURON_EP_ORT_API_VERSION;
 
   // Create the per-session Neuron handle.  provider_options carries flags
   // like NEURON_FLAG_USE_FP16, NEURON_FLAG_CPU_DISABLED, etc.

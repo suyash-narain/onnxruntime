@@ -116,6 +116,18 @@ set_target_properties(onnxruntime_providers_neuron PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# ORT API version cap
+# Set to match the ORT runtime on the target device.
+# ---------------------------------------------------------------------------
+if(NOT DEFINED NEURON_EP_ORT_API_VERSION)
+  set(NEURON_EP_ORT_API_VERSION 24)
+endif()
+target_compile_definitions(onnxruntime_providers_neuron PRIVATE
+    NEURON_EP_ORT_API_VERSION=${NEURON_EP_ORT_API_VERSION}
+)
+message(STATUS "  ORT API version: ${NEURON_EP_ORT_API_VERSION}")
+
+# ---------------------------------------------------------------------------
 # Compiler warnings
 # ---------------------------------------------------------------------------
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

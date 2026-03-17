@@ -73,7 +73,7 @@ OrtStatus* AddKernel::Compute(OrtKernelContext* ctx) {
 // AddNodeComputeInfo
 // ============================================================================
 AddNodeComputeInfo::AddNodeComputeInfo(AddKernel* k) : kernel(k) {
-  ort_version_supported = ORT_API_VERSION;
+  ort_version_supported = NEURON_EP_ORT_API_VERSION;
   CreateState  = CreateStateImpl;
   Compute      = ComputeImpl;
   ReleaseState = ReleaseStateImpl;
@@ -174,7 +174,7 @@ OrtStatus* NeuronWrapper_GetCapability(
 
     // Register this single node as a fused subgraph.
     OrtNodeFusionOptions opts{};
-    opts.ort_version_supported      = ORT_API_VERSION;
+    opts.ort_version_supported      = NEURON_EP_ORT_API_VERSION;
     opts.drop_constant_initializers = false;
 
     const OrtNode* raw_node = node;

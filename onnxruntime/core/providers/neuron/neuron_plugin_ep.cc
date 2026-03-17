@@ -38,7 +38,7 @@ EXPORT_SYMBOL OrtStatus* CreateEpFactories(
     size_t*              num_factories) {
 
   // 1. Obtain versioned APIs.
-  const OrtApi*           ort_api          = ort_api_base->GetApi(ORT_API_VERSION);
+  const OrtApi*           ort_api          = ort_api_base->GetApi(NEURON_EP_ORT_API_VERSION);
   const OrtEpApi*         ep_api           = ort_api->GetEpApi();
   const OrtModelEditorApi* model_editor_api = ort_api->GetModelEditorApi();
 
