@@ -153,9 +153,14 @@ OrtStatus* NeuronWrapper_GetCapability(
     std::string op  = node.GetOperatorType();
     std::string dom = node.GetDomain();
 
-    // Only claim Add in the default ONNX domain.
+    // Claim Add in the default ONNX domain and in the NHWC-transformed domain
+    // (com.ms.internal.nhwc).  ORT calls GetCapability twice when the EP
+    // requests NHWC layout: once before layout transformation (dom == "" or
+    // "ai.onnx") and once after (dom == "com.ms.internal.nhwc").  We must
+    // claim the node in both passes so that ORT does not end up with a
+    // layout-transformed node that no EP can run.
     if (op != "Add") continue;
-    if (!dom.empty() && dom != "ai.onnx") continue;
+    if (!dom.empty() && dom != "ai.onnx" && dom != "com.ms.internal.nhwc") continue;
 
     auto inputs  = node.GetInputs();
     auto outputs = node.GetOutputs();
