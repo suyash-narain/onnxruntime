@@ -116,7 +116,7 @@ OrtStatus* ORT_API_CALL NeuronEpFactory::GetSupportedDevicesImpl(
     f.ort_api.CreateKeyValuePairs(&ep_options);
 
     // Metadata visible to users querying the EP device.
-    f.ort_api.AddKeyValuePair(ep_metadata, "version",  f.ep_version_.c_str());
+    // Note: "version" must NOT be set here – ORT injects it automatically from GetVersion().
     f.ort_api.AddKeyValuePair(ep_metadata, "vendor",   f.vendor_.c_str());
     f.ort_api.AddKeyValuePair(ep_metadata, "ep_name",  f.ep_name_.c_str());
 
