@@ -17,6 +17,17 @@ Status ParseSemVerVersion(std::string_view version_string, SemVerVersion* semver
   static const std::regex semver_pattern{
       R"(^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$)"};
 
+  // Some plugin EPs ship 4-component versions (e.g. "1.2.3.4").  Strip the
+  // trailing numeric component so they still parse correctly.
+  static const std::regex four_component_pattern{R"(^(\d+\.\d+\.\d+)\.\d+$)"};
+  std::string normalized{};
+  std::cmatch four_match{};
+  if (std::regex_match(version_string.data(), version_string.data() + version_string.size(),
+                       four_match, four_component_pattern)) {
+    normalized = four_match[1].str();
+    version_string = normalized;
+  }
+
   std::cmatch match_result{};
   ORT_RETURN_IF_NOT(std::regex_match(version_string.data(), version_string.data() + version_string.size(),
                                      match_result, semver_pattern),
