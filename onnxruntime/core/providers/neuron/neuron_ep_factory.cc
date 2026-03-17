@@ -19,7 +19,7 @@ NeuronEpFactory::NeuronEpFactory(const char* ep_name, ApiPtrs apis,
       ep_name_{ep_name},
       default_memory_info_{nullptr},
       readonly_memory_info_{nullptr} {
-  ort_version_supported = NEURON_EP_ORT_API_VERSION;
+  ort_version_supported = ORT_API_VERSION;
 
   // Populate the C vtable.
   GetName                                 = GetNameImpl;
