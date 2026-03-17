@@ -9,14 +9,24 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ---------------------------------------------------------------------------
 
 # Where the onnxruntime headers live.
-# Override: cmake -DONNXRUNTIME_ROOT=/path/to/onnxruntime_install ..
-if(NOT DEFINED ONNXRUNTIME_ROOT)
-  set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime_install")
+# Option 1 (preferred): point directly at the session headers dir:
+#   cmake -DONNXRUNTIME_INCLUDE_DIR=/path/to/include/onnxruntime/core/session ..
+# Option 2: point at the install root and let CMake derive the path:
+#   cmake -DONNXRUNTIME_ROOT=/path/to/onnxruntime_install ..
+if(NOT DEFINED ONNXRUNTIME_INCLUDE_DIR)
+  if(NOT DEFINED ONNXRUNTIME_ROOT)
+    set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime_install")
+  endif()
+  set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_ROOT}/include/onnxruntime/core/session")
 endif()
 
 # Where to find libonnxruntime.so.
 if(NOT DEFINED ONNXRUNTIME_LIB_DIR)
-  set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
+  if(DEFINED ONNXRUNTIME_ROOT)
+    set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
+  else()
+    set(ONNXRUNTIME_LIB_DIR "")
+  endif()
 endif()
 
 # GSL (Microsoft.GSL) include directory.
@@ -66,7 +76,7 @@ add_library(onnxruntime_providers_neuron MODULE
 
 # Public ORT headers + neuron_impl headers.
 target_include_directories(onnxruntime_providers_neuron PRIVATE
-    "${ONNXRUNTIME_ROOT}/include/onnxruntime/core/session"
+    "${ONNXRUNTIME_INCLUDE_DIR}"
     "${GSL_INCLUDE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}"   # neuron_ep_utils.h etc.
     "${NEURON_IMPL_DIR}"            # neuron_impl internal headers
@@ -121,7 +131,7 @@ install(TARGETS onnxruntime_providers_neuron
         LIBRARY DESTINATION lib)
 
 message(STATUS "NeuronPluginEP build:")
-message(STATUS "  ORT root       : ${ONNXRUNTIME_ROOT}")
+message(STATUS "  ORT include    : ${ONNXRUNTIME_INCLUDE_DIR}")
 message(STATUS "  ORT lib dir    : ${ONNXRUNTIME_LIB_DIR}")
 message(STATUS "  GSL include    : ${GSL_INCLUDE_DIR}")
 message(STATUS "  neuron_impl    : ${NEURON_IMPL_DIR}")
